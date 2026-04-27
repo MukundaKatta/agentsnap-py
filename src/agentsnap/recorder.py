@@ -52,6 +52,10 @@ def record(
     """
     if not callable(fn):
         raise TypeError("record: fn must be callable")
+    if asyncio.iscoroutinefunction(fn):
+        raise TypeError(
+            "record: fn is async; use arecord(fn) for async agents."
+        )
     recorder = _Recorder(capture_results=capture_results)
     token = _recorder_var.set(recorder)
     output: Any = None
@@ -59,13 +63,20 @@ def record(
     try:
         output = fn()
         if inspect.isawaitable(output):
+            # Defensive: caller wrapped the async fn somehow (e.g. partial).
+            # Re-raise outside the trap so the test/user sees it.
             raise TypeError(
                 "record: fn returned an awaitable; use arecord(fn) for async agents."
             )
+    except TypeError:
+        # Awaitable-result mismatch is a programming error, not a tool error.
+        _recorder_var.reset(token)
+        raise
     except Exception as exc:
         error = _serialize_error(exc)
     finally:
-        _recorder_var.reset(token)
+        if _recorder_var.get() is recorder:
+            _recorder_var.reset(token)
 
     return _build_trace(
         recorder=recorder,
